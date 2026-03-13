@@ -1,5 +1,6 @@
 """Claude API client - builds prompts from memory and generates responses."""
 import os
+import re
 import anthropic
 from config import ANTHROPIC_API_KEY
 from memory import get_recent_messages, get_summaries, get_knowledge
@@ -185,7 +186,29 @@ def generate_response(user_question, user_name="someone"):
         ],
     )
 
-    return response.content[0].text
+    return _to_slack_mrkdwn(response.content[0].text)
+
+
+def _to_slack_mrkdwn(text):
+    """Convert Markdown to Slack mrkdwn format."""
+    # --- (horizontal rule) → ———
+    text = re.sub(r'^-{3,}$', '———', text, flags=re.MULTILINE)
+
+    # ### heading → *heading* (do ### before ## before #)
+    text = re.sub(r'^###\s+(.+)$', r'*\1*', text, flags=re.MULTILINE)
+    text = re.sub(r'^##\s+(.+)$', r'*\1*', text, flags=re.MULTILINE)
+    text = re.sub(r'^#\s+(.+)$', r'*\1*', text, flags=re.MULTILINE)
+
+    # **bold** → *bold* (but not inside code blocks)
+    text = re.sub(r'\*\*(.+?)\*\*', r'*\1*', text)
+
+    # [text](url) → <url|text>
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<\2|\1>', text)
+
+    # Remove double **** that might result from **bold** inside *heading*
+    text = text.replace('**', '')
+
+    return text
 
 
 def generate_daily_summary(messages_text):
