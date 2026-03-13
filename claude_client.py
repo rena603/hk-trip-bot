@@ -1,4 +1,5 @@
 """Claude API client - builds prompts from memory and generates responses."""
+import os
 import anthropic
 from config import ANTHROPIC_API_KEY
 from memory import get_recent_messages, get_summaries, get_knowledge
@@ -6,74 +7,80 @@ from sheets import get_cached_sheet_data
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
+# Load knowledge base from file
+_knowledge_base = ""
+_knowledge_path = os.path.join(os.path.dirname(__file__), "knowledge", "hk_guide.txt")
+try:
+    with open(_knowledge_path, "r", encoding="utf-8") as f:
+        _knowledge_base = f.read()
+except FileNotFoundError:
+    _knowledge_base = ""
+
+
+def _find_relevant_sections(question, full_text):
+    """Find relevant sections from the knowledge base based on the question."""
+    if not full_text:
+        return ""
+
+    # Keywords to section mapping
+    section_keywords = {
+        "エリア別ガイド": ["エリア", "中環", "セントラル", "尖沙咀", "チムサーチョイ", "旺角", "モンコック", "銅鑼湾", "上環", "深水埗", "ランタオ", "南丫島", "ラマ島", "西營盤", "どこ", "場所", "地区"],
+        "グルメ完全ガイド": ["グルメ", "食事", "レストラン", "飲茶", "ヤムチャ", "ワンタン", "麺", "焼味", "火鍋", "デザート", "スイーツ", "食べ", "おいしい", "美味", "名店", "ミシュラン", "屋台", "ストリートフード", "お店", "エッグタルト"],
+        "交通完全ガイド": ["交通", "MTR", "地下鉄", "バス", "トラム", "フェリー", "タクシー", "空港", "オクトパス", "移動", "行き方", "アクセス", "乗り換え", "路線"],
+        "入国・ビザ・税関": ["ビザ", "パスポート", "入国", "税関", "持ち込み", "入境", "検疫", "空港到着"],
+        "買い物ガイド": ["買い物", "ショッピング", "お土産", "免税", "ブランド", "マーケット", "女人街"],
+        "文化・マナー": ["文化", "マナー", "チップ", "タブー", "治安", "安全", "喫煙", "禁煙"],
+        "4月の旅行ガイド": ["4月", "天気", "気温", "服装", "季節", "イベント", "雨"],
+        "緊急時の対応": ["緊急", "病院", "警察", "大使館", "総領事館", "トラブル", "パスポート紛失", "保険"],
+        "モデルコース": ["モデルコース", "プラン", "スケジュール", "日程", "2泊", "3泊", "何日", "旅程", "コース"],
+        "穴場スポット": ["穴場", "隠れ", "地元", "インスタ", "おすすめ", "人気ない", "空いて"],
+        "Wi-Fi・通信": ["Wi-Fi", "wifi", "eSIM", "SIM", "通信", "ネット", "データ"],
+        "両替・支払い": ["両替", "お金", "現金", "クレジット", "カード", "支払", "通貨", "ドル", "レート", "AlipayHK"],
+    }
+
+    question_lower = question.lower()
+    matched_sections = []
+
+    for section_title, keywords in section_keywords.items():
+        for kw in keywords:
+            if kw.lower() in question_lower:
+                matched_sections.append(section_title)
+                break
+
+    # If no specific match, include a few general sections
+    if not matched_sections:
+        matched_sections = ["エリア別ガイド", "グルメ完全ガイド", "モデルコース"]
+
+    # Extract matched sections from the full text
+    result_parts = []
+    sections = full_text.split("■ ")
+    for section in sections:
+        for title in matched_sections:
+            if title in section:
+                # Limit each section to prevent token overflow
+                lines = section.strip().split("\n")
+                result_parts.append("\n".join(lines[:80]))
+                break
+
+    return "\n\n".join(result_parts) if result_parts else ""
+
+
 SYSTEM_PROMPT_TEMPLATE = """あなたは「HKガイド」です。5人のチームの香港社員旅行（2026年4月上旬）をサポートする専属アシスタントです。
 
 ## あなたの役割
-1. **旅行アシスタント**: 香港の観光スポット・グルメ・交通（MTR/バス/フェリー/タクシー）・文化・天気・両替・Wi-Fi・持ち物など、プロの旅行ガイドとしてアドバイス
+1. **旅行アシスタント**: 香港の観光スポット・グルメ・交通・文化・天気・両替・Wi-Fi・持ち物など、プロの旅行ガイドとしてアドバイス
 2. **チームの記憶係**: このチャンネルの会話を全て記憶しており、過去の議論・決定事項・経緯を正確に把握
 3. **スケジュール管理**: 旅程・予約・準備タスクの状況を把握し、聞かれたら即答
 
 ## ルール
 - 日本語で回答する
 - 簡潔に答える（長文は箇条書きで整理）
+- 以下の専門ガイド情報を積極的に活用して、具体的な店名・場所・料金・コツを含めた実践的な回答をする
 - 過去の会話で決まったことは「〇月〇日に△△さんが提案して決まりました」のように経緯付きで回答
 - わからないことは正直に「まだチャンネルでは話題に出ていません」と言う
-- 香港の最新情報（2024-2025年時点の知識）をベースにアドバイスする
 
-## 香港基本情報
-- 通貨: 香港ドル (HKD)、1HKD ≒ 19-20円
-- 言語: 広東語・英語（観光地は英語OK、ローカル店は広東語メイン）
-- 交通: オクトパスカード必須（MTR・バス・コンビニ・一部レストラン）
-- 時差: 日本 -1時間
-- 電圧: 220V（BFタイプ、変換プラグ必要）
-- 4月の気温: 22-27℃、湿度高め、雨の可能性あり（折り畳み傘推奨）
-
-## 入国・ビザ・パスポート
-- 日本国籍: 90日以内の観光・商用はビザ不要
-- パスポート残存期間: 入国時に1ヶ月＋滞在日数以上必要（推奨: 6ヶ月以上）
-- 入国時: 入境カード（Arrival Card）の記入が必要（機内で配布 or 到着後）
-- 記入項目: 氏名、パスポート番号、国籍、便名、滞在先ホテル名・住所、滞在期間
-- 税関申告: 酒類1本(1L)、タバコ19本、HKD12万以上の現金は申告必要
-- 出入国カード電子化: 2024年以降、事前オンライン申請（Hong Kong e-道）も利用可能
-- 到着後の流れ: パスポートコントロール → 荷物受取 → 税関 → 到着ロビー
-- 空港から市内: エアポートエクスプレス（約24分、HKD115で香港駅へ）、バス、タクシー
-
-## 準備チェックリスト
-- パスポート（残存期間確認）
-- 海外旅行保険（クレカ付帯 or 別途加入）
-- 変換プラグ（BFタイプ、100均で購入可）
-- Wi-Fi / eSIM（香港はeSIM対応、SIMカード空港購入も可）
-- オクトパスカード（空港で購入、HKD150 = デポジットHKD50 + チャージHKD100）
-- 現金（両替は重慶大厦がレート良し、空港は割高）
-- 折り畳み傘（4月は雨季の始まり）
-- 常備薬・日焼け止め
-- クレジットカード（VISA/Masterが主流、JCBは使えない場所も）
-
-## 交通詳細
-- MTR（地下鉄）: 主要観光地をカバー、オクトパスでタッチ、始発6時頃〜終電0時頃
-- バス: 2階建てバスが便利、オクトパス対応、夜景スポット巡りにも
-- スターフェリー: 尖沙咀↔中環、HKD6.5、ビクトリアハーバーの景色が最高
-- タクシー: 初乗りHKD27、日本より安い、広東語メインだが行き先を漢字で見せればOK
-- トラム: 香港島のみ、HKD3、レトロで観光にも◎
-- ピークトラム: ビクトリアピーク行き、往復HKD88、混雑時は1時間以上待つことも
-
-## 人気観光スポット
-- ビクトリアピーク: 香港一の夜景スポット、ピークトラムかバスでアクセス
-- 尖沙咀プロムナード: ビクトリアハーバー沿い、シンフォニーオブライツ(毎晩20時)
-- 女人街（通菜街）: ナイトマーケット、お土産・雑貨の値切り交渉
-- 黄大仙祠: パワースポット、おみくじが有名
-- ランタオ島・天壇大仏: 巨大大仏、昂坪360ケーブルカー
-- 香港ディズニーランド: コンパクトで1日で回れる
-- ネイザンロード: 九龍のメインストリート、ネオン街
-
-## グルメ
-- 飲茶（ヤムチャ）: 添好運（ミシュラン最安）、蓮香居、翠園
-- ワンタン麺: 沾仔記、麥奀雲呑麵世家
-- 焼味（ローストミート）: 再興焼臘飯店、一楽焼鵝
-- エッグタルト: 泰昌餅家（中環）、檀島咖啡餅店
-- 火鍋: 地元民にも人気、予算HKD200-400/人
-- ミシュラン屋台: 香港は屋台レベルでもミシュラン星付き店あり
-- 注意: チップ文化あり（レストランで10%程度、サービス料込みなら不要）
+## 専門ガイド情報（プロ監修）
+{knowledge}
 
 ## スプレッドシートの情報
 {sheet_data}
@@ -114,11 +121,15 @@ def generate_response(user_question, user_name="someone"):
     summaries = get_summaries()
     sheet_data = get_cached_sheet_data()
 
+    # Find relevant knowledge sections based on the question
+    relevant_knowledge = _find_relevant_sections(user_question, _knowledge_base)
+
     # Build system prompt
     formatted_recent = _format_messages(recent)
     formatted_summaries = _format_summaries(summaries)
 
     system = SYSTEM_PROMPT_TEMPLATE.format(
+        knowledge=relevant_knowledge if relevant_knowledge else "（該当するガイド情報なし）",
         sheet_data=sheet_data,
         summaries=formatted_summaries,
         recent_messages=formatted_recent,
@@ -126,11 +137,11 @@ def generate_response(user_question, user_name="someone"):
 
     # Token budget check - trim recent messages if too long
     total_estimate = _estimate_tokens(system) + _estimate_tokens(user_question)
-    if total_estimate > 12000:
-        # Reduce recent messages
+    if total_estimate > 15000:
         recent = get_recent_messages(limit=20)
         formatted_recent = _format_messages(recent)
         system = SYSTEM_PROMPT_TEMPLATE.format(
+            knowledge=relevant_knowledge if relevant_knowledge else "（該当するガイド情報なし）",
             sheet_data=sheet_data,
             summaries=formatted_summaries,
             recent_messages=formatted_recent,
