@@ -36,6 +36,9 @@ def _find_relevant_sections(question, full_text):
         "穴場スポット": ["穴場", "隠れ", "地元", "インスタ", "おすすめ", "人気ない", "空いて"],
         "Wi-Fi・通信": ["Wi-Fi", "wifi", "eSIM", "SIM", "通信", "ネット", "データ"],
         "両替・支払い": ["両替", "お金", "現金", "クレジット", "カード", "支払", "通貨", "ドル", "レート", "AlipayHK"],
+        "旅程スケジュール": ["旅程", "スケジュール", "日程", "いつ", "何日", "ホテル", "宿", "フライト", "飛行機", "到着", "出発", "帰国", "深圳", "マカオ", "展示会", "ハイテクツアー", "ツアー", "カオルーン", "華強", "NH965", "NH860", "UO862", "QR817", "EY768", "ANA", "部屋", "チェックイン", "チェックアウト", "予約番号", "空港", "移動", "集合"],
+        "旅費・予算": ["旅費", "予算", "費用", "いくら", "お金", "合計", "支払", "領収書", "精算", "一人当たり", "AMEX", "会社負担", "割り勘", "立替"],
+        "TODO・準備チェックリスト": ["TODO", "準備", "やること", "チェック", "持ち物", "Alipay", "SIM", "VPN", "オクトパス", "WeChat", "wechat", "百度", "DiDi", "まだ", "終わってない", "できてない", "未完了", "決めないと", "決めること", "未決定", "確認", "優先", "パスポート", "保険", "変換プラグ", "両替"],
     }
 
     question_lower = question.lower()
@@ -49,7 +52,7 @@ def _find_relevant_sections(question, full_text):
 
     # If no specific match, include a few general sections
     if not matched_sections:
-        matched_sections = ["エリア別ガイド", "グルメ完全ガイド", "モデルコース"]
+        matched_sections = ["旅程スケジュール", "TODO・準備チェックリスト", "エリア別ガイド"]
 
     # Extract matched sections from the full text
     result_parts = []
