@@ -186,29 +186,33 @@ def generate_response(user_question, user_name="someone"):
         ],
     )
 
-    return _to_slack_mrkdwn(response.content[0].text)
+    return _strip_markdown(response.content[0].text)
 
 
-def _to_slack_mrkdwn(text):
-    """Convert Markdown to Slack mrkdwn format."""
-    # --- (horizontal rule) → ———
-    text = re.sub(r'^-{3,}$', '———', text, flags=re.MULTILINE)
+def _strip_markdown(text):
+    """Strip all Markdown formatting, return clean plain text."""
+    # Remove heading markers (###, ##, #)
+    text = re.sub(r'^#{1,3}\s+', '', text, flags=re.MULTILINE)
 
-    # ### heading → *heading* (do ### before ## before #)
-    text = re.sub(r'^###\s+(.+)$', r'*\1*', text, flags=re.MULTILINE)
-    text = re.sub(r'^##\s+(.+)$', r'*\1*', text, flags=re.MULTILINE)
-    text = re.sub(r'^#\s+(.+)$', r'*\1*', text, flags=re.MULTILINE)
+    # Remove **bold** markers → just the text inside
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
 
-    # **bold** → *bold* (but not inside code blocks)
-    text = re.sub(r'\*\*(.+?)\*\*', r'*\1*', text)
-
-    # [text](url) → <url|text>
-    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<\2|\1>', text)
-
-    # Remove double **** that might result from **bold** inside *heading*
+    # Remove remaining stray **
     text = text.replace('**', '')
 
-    return text
+    # Remove *italic* markers → just the text inside (but not list bullets like "* item")
+    text = re.sub(r'(?<!\n)\*([^\s*][^*]*[^\s*])\*', r'\1', text)
+
+    # --- horizontal rules → blank line
+    text = re.sub(r'^-{3,}$', '', text, flags=re.MULTILINE)
+
+    # [text](url) → text (url)
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'\1 (\2)', text)
+
+    # Clean up excessive blank lines (3+ → 2)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    return text.strip()
 
 
 def generate_daily_summary(messages_text):

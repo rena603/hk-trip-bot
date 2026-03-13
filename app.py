@@ -96,7 +96,18 @@ def handle_mention(event, say):
     try:
         # Show typing indicator via a temporary message
         response = generate_response(question, user_name)
-        say(text=response, thread_ts=thread_ts)
+        # Split into section blocks (Slack 3000 char limit per block)
+        blocks = []
+        chunk = ""
+        for line in response.split("\n"):
+            if len(chunk) + len(line) + 1 > 2900:
+                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
+                chunk = line
+            else:
+                chunk = chunk + "\n" + line if chunk else line
+        if chunk:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
+        say(text=response, blocks=blocks, thread_ts=thread_ts)
     except Exception as e:
         say(text=f"すみません、エラーが発生しました: {str(e)[:100]}", thread_ts=thread_ts)
 
